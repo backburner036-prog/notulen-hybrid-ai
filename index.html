@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Notulen — Offline-first meeting minutes with Firebase AI Logic</title>
+<meta name="description" content="Turn raw meeting notes or a whiteboard photo into structured minutes. On-device Gemini Nano first, cloud Gemini fallback — one Firebase AI Logic SDK.">
+<style>
+  :root { --bg:#0f172a; --panel:#1e293b; --panel2:#16213a; --text:#f1f5f9; --muted:#94a3b8;
+    --accent:#38bdf8; --green:#4ade80; --amber:#fbbf24; --red:#f87171; --border:#334155; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--text); }
+  header { padding:20px 24px 8px; max-width:980px; margin:0 auto; }
+  h1 { margin:0; font-size:28px; }
+  h1 span { color:var(--accent); }
+  .tagline { color:var(--muted); margin:6px 0 0; }
+  .pills { display:flex; flex-wrap:wrap; gap:8px; margin:14px 0 0; }
+  .pill { font-size:12px; padding:5px 10px; border-radius:999px; border:1px solid var(--border); background:var(--panel); color:var(--muted); }
+  .pill b { color:var(--text); }
+  .pill.ok b { color:var(--green); } .pill.warn b { color:var(--amber); } .pill.bad b { color:var(--red); }
+  main { max-width:980px; margin:0 auto; padding:12px 24px 40px; display:grid; gap:16px; }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:16px; }
+  .card h2 { margin:0 0 10px; font-size:16px; }
+  label { display:block; font-size:13px; color:var(--muted); margin:10px 0 4px; }
+  textarea { width:100%; min-height:150px; resize:vertical; background:var(--panel2); color:var(--text);
+    border:1px solid var(--border); border-radius:8px; padding:10px; font:14px/1.5 system-ui,sans-serif; }
+  select, input[type=text] { background:var(--panel2); color:var(--text); border:1px solid var(--border);
+    border-radius:8px; padding:8px 10px; font-size:14px; }
+  .row { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+  .row > * { flex:0 0 auto; }
+  button { background:var(--accent); color:#082f49; border:0; border-radius:8px; padding:10px 16px;
+    font-size:14px; font-weight:700; cursor:pointer; }
+  button:disabled { opacity:.55; cursor:wait; }
+  button.secondary { background:transparent; color:var(--accent); border:1px solid var(--accent); }
+  button.danger { background:transparent; color:var(--red); border:1px solid var(--red); }
+  .check { display:flex; gap:6px; align-items:center; font-size:13px; color:var(--muted); }
+  #imgPreview { max-width:100%; max-height:220px; border-radius:8px; margin-top:8px; display:none; }
+  #status { font-size:13px; color:var(--muted); min-height:18px; margin-top:10px; white-space:pre-wrap; }
+  .badge { display:inline-block; font-size:12px; font-weight:700; padding:4px 10px; border-radius:999px; margin-right:8px; }
+  .badge.device { background:#14532d; color:#bbf7d0; } .badge.cloud { background:#1e3a5f; color:#bfdbfe; }
+  .badge.local { background:#3f3f46; color:#e4e4e7; }
+  .meta { font-size:12px; color:var(--muted); }
+  #output h3 { margin:16px 0 6px; font-size:15px; color:var(--accent); }
+  #output ul, #output ol { margin:4px 0; padding-left:22px; }
+  #output table { width:100%; border-collapse:collapse; font-size:14px; }
+  #output th, #output td { border:1px solid var(--border); padding:6px 8px; text-align:left; }
+  #output th { background:var(--panel2); }
+  pre { background:var(--panel2); border:1px solid var(--border); border-radius:8px; padding:10px;
+    overflow:auto; font-size:12px; max-height:260px; }
+  details { margin-top:10px; } summary { cursor:pointer; color:var(--muted); font-size:13px; }
+  .history-item { display:flex; justify-content:space-between; gap:8px; padding:8px 4px; border-bottom:1px solid var(--border);
+    font-size:13px; cursor:pointer; }
+  .history-item:hover { background:var(--panel2); }
+  .history-item small { color:var(--muted); }
+  footer { max-width:980px; margin:0 auto; padding:0 24px 30px; color:var(--muted); font-size:12px; }
+  footer a { color:var(--accent); }
+  .hidden { display:none; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "firebase/app": "https://www.gstatic.com/firebasejs/13.4.0/firebase-app.js",
+    "firebase/ai": "https://www.gstatic.com/firebasejs/13.4.0/firebase-ai.js",
+    "firebase/app-check": "https://www.gstatic.com/firebasejs/13.4.0/firebase-app-check.js"
+  }
+}
+</script>
+</head>
+<body>
+<header>
+  <h1>Notulen <span>— meeting minutes, on-device first</span></h1>
+  <p class="tagline">Paste raw notes or a whiteboard photo. Gemini Nano on your device answers in seconds, free and offline — and Firebase AI Logic falls back to cloud Gemini when the device can't. One SDK, both paths.</p>
+  <div class="pills">
+    <span class="pill" id="pillDevice">On-device model: <b>checking…</b></span>
+    <span class="pill" id="pillNet">Network: <b>—</b></span>
+    <span class="pill" id="pillBackend">Backend: <b>checking…</b></span>
+    <span class="pill" id="pillMode">Mode: <b>PREFER_ON_DEVICE</b></span>
+  </div>
+</header>
+
+<main>
+  <section class="card">
+    <h2>1 · Your raw notes</h2>
+    <label for="notes">Meeting notes (paste text, any mess is fine)</label>
+    <textarea id="notes" placeholder="e.g. Weekly sync 23 Nov — Ana: launch landing page by Fri, needs design sign-off from Budi. Budi: mockups ready Wed. Dedi: budget $500 approved for ads, invoice due 30 Nov. Open: do we run the promo in Dec or Jan? …"></textarea>
+    <div class="row">
+      <button class="secondary" id="btnSample" type="button">Load sample notes</button>
+      <button class="secondary" id="btnClear" type="button">Clear</button>
+    </div>
+    <label for="imgInput">…or a whiteboard / handwritten-notes photo (JPEG/PNG — read on-device when available)</label>
+    <input type="file" id="imgInput" accept="image/jpeg,image/png">
+    <img id="imgPreview" alt="Uploaded notes photo preview">
+    <div class="row" style="margin-top:12px">
+      <label for="mode" style="margin:0">Inference mode</label>
+      <select id="mode">
+        <option value="PREFER_ON_DEVICE" selected>PREFER_ON_DEVICE — device first, cloud fallback</option>
+        <option value="PREFER_IN_CLOUD">PREFER_IN_CLOUD — cloud first, device fallback when offline</option>
+        <option value="ONLY_ON_DEVICE">ONLY_ON_DEVICE — device only (throws if unavailable)</option>
+        <option value="ONLY_IN_CLOUD">ONLY_IN_CLOUD — cloud only</option>
+      </select>
+      <label class="check"><input type="checkbox" id="simulateOffline"> Simulate offline</label>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <button id="btnGenerate" type="button">Generate minutes</button>
+      <span class="meta" id="hint">Runs on your click (Chrome requires a user gesture to start the on-device model).</span>
+    </div>
+    <div id="status" aria-live="polite"></div>
+  </section>
+
+  <section class="card" id="resultCard">
+    <h2>2 · Minutes</h2>
+    <div id="output"><p class="meta">Nothing yet — generate minutes from your notes above.</p></div>
+    <div class="row hidden" id="actionsRow" style="margin-top:12px">
+      <button class="secondary" id="btnDownload" type="button">Download .md</button>
+      <button class="secondary" id="btnCopy" type="button">Copy JSON</button>
+    </div>
+    <details>
+      <summary>Raw model output (JSON)</summary>
+      <pre id="rawOut">(empty)</pre>
+    </details>
+  </section>
+
+  <section class="card">
+    <h2>3 · History (saved on this device)</h2>
+    <div id="history"><p class="meta">No saved minutes yet.</p></div>
+    <div class="row" style="margin-top:10px">
+      <button class="danger" id="btnClearHistory" type="button">Clear history</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Setup — Firebase AI Logic (2 minutes, free Spark plan)</h2>
+    <p class="meta">Demo mode (no config) uses Chrome's on-device Prompt API directly, or a local fallback when no model is present — so anyone can try the app with zero setup. To run the real Firebase AI Logic hybrid path, paste your web app's Firebase config JSON below (or edit <code>firebase-config.js</code>). Your config is stored only in this browser's localStorage, never sent anywhere except to Firebase. App Check debug tokens are used on localhost, as documented — see README.</p>
+    <label for="cfgInput">Firebase config JSON</label>
+    <textarea id="cfgInput" style="min-height:90px" placeholder='{"apiKey": "…", "authDomain": "…", "projectId": "…", "storageBucket": "…", "messagingSenderId": "…", "appId": "…"}'></textarea>
+    <div class="row" style="margin-top:10px">
+      <button class="secondary" id="btnSaveCfg" type="button">Save config &amp; reload</button>
+      <button class="secondary" id="btnClearCfg" type="button">Remove saved config</button>
+    </div>
+  </section>
+</main>
+
+<footer>
+  Built for <a href="https://firebasehybridaihackathon.devpost.com/" target="_blank" rel="noopener">#BuildHybridAI 2026</a> with Firebase AI Logic hybrid inference (Gemini Nano on-device + cloud Gemini).
+  On-device inference needs Chrome 139+ on desktop with the Prompt API flag enabled — see README.
+  No data leaves your device on the on-device path; the cloud path only runs when the device model is unavailable or you choose it.
+</footer>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>
